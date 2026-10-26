@@ -8,13 +8,13 @@ from . import config
 from .db import connect, init_db, now
 from .scoring import score_page, verdict_for
 
-app = FastAPI(title="home-lock")
+app = FastAPI(title="Shepherd")
 
 
 @app.on_event("startup")
 def _startup() -> None:
     if not config.ADMIN_KEY:
-        raise RuntimeError("Set HOMELOCK_ADMIN_KEY before starting the server")
+        raise RuntimeError("Set SHEPHERD_ADMIN_KEY before starting the server")
     init_db()
 
 

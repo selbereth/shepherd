@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "home-lock",
+  "name": "Shepherd",
   "version": "0.1.0",
-  "description": "Reports pages to your home-lock server and blocks banned sites.",
+  "description": "Reports pages to your shepherd server and blocks banned sites.",
   "permissions": ["storage", "declarativeNetRequest", "alarms"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },

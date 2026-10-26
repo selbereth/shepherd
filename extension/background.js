@@ -1,5 +1,5 @@
 // Syncs the banned-domain list into declarativeNetRequest rules and relays
-// page reports from the content script to the home-lock server.
+// page reports from the content script to the shepherd server.
 const SYNC_MINUTES = 5;
 
 async function cfg() {
@@ -34,7 +34,7 @@ async function syncBanned() {
       addRules: rules,
     });
   } catch (e) {
-    console.warn("home-lock sync failed", e);
+    console.warn("shepherd sync failed", e);
   }
 }
 
