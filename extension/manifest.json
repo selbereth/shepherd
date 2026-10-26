@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "home-lock",
+  "version": "0.1.0",
+  "description": "Reports pages to your home-lock server and blocks banned sites.",
+  "permissions": ["storage", "declarativeNetRequest", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    { "matches": ["http://*/*", "https://*/*"], "js": ["content.js"], "run_at": "document_idle" }
+  ],
+  "options_page": "options.html",
+  "web_accessible_resources": [{ "resources": ["blocked.html"], "matches": ["<all_urls>"] }]
+}

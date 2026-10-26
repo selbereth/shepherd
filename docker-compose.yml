@@ -1,0 +1,12 @@
+services:
+  server:
+    build: ./server
+    restart: unless-stopped
+    ports: ["8080:8080"]
+    environment:
+      HOMELOCK_ADMIN_KEY: ${HOMELOCK_ADMIN_KEY:?set in .env}
+      HOMELOCK_AUTO_BAN: ${HOMELOCK_AUTO_BAN:-false}
+    volumes: ["./data:/data"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8080/docs')"]
+      interval: 30s
