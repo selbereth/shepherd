@@ -43,3 +43,73 @@ def test_banned_domain_includes_subdomains(client, dev):
     assert "bad.test" in client.get("/api/banned", headers=dev).json()["domains"]
     client.delete("/admin/banned/bad.test", headers=ADMIN)
     assert check(client, dev, "https://bad.test")["verdict"] == "allow"
+
+
+# ---- alerts, heartbeat, dashboard endpoints ----
+
+from app import alerts, config  # noqa: E402
+from app.db import connect  # noqa: E402
+
+
+@pytest.fixture()
+def sent(monkeypatch):
+    calls = []
+    monkeypatch.setattr(alerts, "send", lambda title, body, priority="default": calls.append((title, body, priority)))
+    alerts._last_sent.clear()
+    return calls
+
+
+def test_block_triggers_one_alert_with_cooldown(client, dev, sent):
+    client.post("/admin/banned", json={"domain": "alert.test"}, headers=ADMIN)
+    check(client, dev, "https://alert.test/a")
+    check(client, dev, "https://alert.test/b")  # same device+domain: suppressed by cooldown
+    assert len(sent) == 1
+    assert "alert.test" in sent[0][0] and sent[0][2] == "high"
+
+
+def test_warn_alerts_only_when_enabled(client, dev, sent, monkeypatch):
+    text = "nsfw porn hentai nude"
+    monkeypatch.setattr(config, "ALERT_ON", "block")
+    check(client, dev, "https://w1.example", text)
+    assert sent == []
+    monkeypatch.setattr(config, "ALERT_ON", "warn")
+    check(client, dev, "https://w2.example", text)
+    assert len(sent) == 1
+
+
+def test_offline_and_back_online(client, sent, monkeypatch):
+    key = client.post("/admin/devices", json={"name": "laptop"}, headers=ADMIN).json()
+    h = {"X-Device-Key": key["key"]}
+    client.get("/api/banned", headers=h)  # heartbeat
+    alerts.check_offline()
+    assert sent == []
+    with connect() as db:
+        db.execute("UPDATE devices SET last_seen = last_seen - 3600 WHERE id = ?", (key["id"],))
+    alerts.check_offline()
+    alerts.check_offline()  # only one alert until it returns
+    assert [s[0] for s in sent] == ["laptop stopped checking in"]
+    client.get("/api/banned", headers=h)
+    alerts.check_offline()
+    assert sent[-1][0] == "laptop is back online"
+
+
+def test_admin_lists_and_stats(client, dev):
+    devices = client.get("/admin/devices", headers=ADMIN).json()
+    assert devices and "key" not in devices[0]
+    assert all(d["last_seen"] for d in devices if d["name"] == "t")
+    assert isinstance(client.get("/admin/banned", headers=ADMIN).json(), list)
+    stats = client.get("/admin/stats", headers=ADMIN).json()
+    assert {"last_24h", "top_domains", "alert_channels"} <= stats.keys()
+    ev = client.get("/admin/events?verdict=block", headers=ADMIN).json()
+    assert ev and "device_name" in ev[0]
+
+
+def test_test_alert_requires_channel(client, monkeypatch):
+    for name in ("NTFY_URL", "WEBHOOK_URL", "SMTP_HOST"):
+        monkeypatch.setattr(config, name, "")
+    assert client.post("/admin/alerts/test", headers=ADMIN).status_code == 400
+
+
+def test_dashboard_served(client):
+    r = client.get("/")
+    assert r.status_code == 200 and "Shepherd" in r.text

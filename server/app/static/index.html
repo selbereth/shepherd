@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shepherd</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --fg:#1b1f24; --muted:#66707a; --line:#e2e5e9; --accent:#2f6fed; --warn:#b7791f; --block:#c53030; --ok:#2f855a; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171a; --card:#1d2125; --fg:#e6e9ec; --muted:#98a2ad; --line:#2d3339; --accent:#6c9bff; --warn:#e0a84a; --block:#f26b6b; --ok:#5fc08a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui,sans-serif; }
+  header { display:flex; align-items:center; gap:1rem; padding:.8rem 1rem; background:var(--card); border-bottom:1px solid var(--line); }
+  header h1 { font-size:1.1rem; margin:0; flex:1; }
+  main { max-width:1100px; margin:0 auto; padding:1rem; }
+  nav { display:flex; gap:.4rem; margin-bottom:1rem; flex-wrap:wrap; }
+  button, input, select { font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:.4rem .7rem; }
+  button { cursor:pointer; }
+  button.primary, nav button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { color:var(--block); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:.8rem; margin-bottom:1rem; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:.8rem 1rem; }
+  .card b { display:block; font-size:1.6rem; }
+  .muted { color:var(--muted); font-size:.85rem; }
+  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  th, td { text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--line); vertical-align:top; word-break:break-word; }
+  th { font-size:.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; }
+  tr:last-child td { border-bottom:0; }
+  .pill { display:inline-block; padding:0 .5rem; border-radius:999px; font-size:.8rem; border:1px solid currentColor; }
+  .pill.block { color:var(--block); } .pill.warn { color:var(--warn); } .pill.ok { color:var(--ok); }
+  .row { display:flex; gap:.5rem; margin-bottom:.8rem; flex-wrap:wrap; }
+  .row input { flex:1; min-width:12rem; }
+  #login { max-width:22rem; margin:20vh auto; }
+  #login input { width:100%; margin:.6rem 0; }
+  .scroll { overflow-x:auto; }
+  .note { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:.8rem 1rem; margin-bottom:.8rem; }
+  code { background:var(--bg); padding:.1rem .3rem; border-radius:4px; word-break:break-all; }
+</style>
+</head>
+<body>
+<div id="login" class="card" hidden>
+  <h2>Shepherd</h2>
+  <p class="muted">Enter your admin key.</p>
+  <input id="key" type="password" autocomplete="current-password">
+  <button class="primary" id="go">Sign in</button>
+  <p class="muted" id="err"></p>
+</div>
+
+<div id="app" hidden>
+  <header><h1>Shepherd</h1><span class="muted" id="alertinfo"></span><button id="logout">Sign out</button></header>
+  <main>
+    <div class="cards" id="cards"></div>
+    <nav id="tabs"></nav>
+    <section id="view"></section>
+  </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let KEY = "";
+try { KEY = localStorage.getItem("shepherd_key") || ""; } catch {}
+
+// Build DOM with textContent only: URLs/titles come from untrusted pages.
+function h(tag, attrs = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) el.append(kid instanceof Node ? kid : document.createTextNode(kid ?? ""));
+  return el;
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", "X-Admin-Key": KEY } });
+  if (res.status === 401) { signOut(); throw new Error("unauthorized"); }
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.status);
+  return res.json();
+}
+
+const fmt = (ts) => ts ? new Date(ts * 1000).toLocaleString() : "never";
+const ago = (ts) => {
+  if (!ts) return "never";
+  const m = Math.round((Date.now() / 1000 - ts) / 60);
+  return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
+};
+const pill = (v) => h("span", { class: "pill " + v }, v);
+
+let tab = "activity", filter = "";
+const tabs = { activity: "Activity", bans: "Banned sites", devices: "Devices" };
+
+function signOut() {
+  try { localStorage.removeItem("shepherd_key"); } catch {}
+  KEY = ""; $("app").hidden = true; $("login").hidden = false;
+}
+
+async function renderCards() {
+  const s = await api("/admin/stats");
+  $("cards").replaceChildren(
+    h("div", { class: "card" }, h("b", {}, String(s.last_24h.block)), "Blocked (24h)"),
+    h("div", { class: "card" }, h("b", {}, String(s.last_24h.warn)), "Flagged (24h)"),
+    h("div", { class: "card" }, "Top: ", s.top_domains.length ? s.top_domains.map((d) => `${d.domain} (${d.n})`).join(", ") : "nothing yet"),
+  );
+  $("alertinfo").textContent = s.alert_channels.length ? "Alerts: " + s.alert_channels.join(", ") : "Alerts: not configured";
+  return s;
+}
+
+async function viewActivity() {
+  const q = filter ? `?verdict=${filter}&limit=200` : "?limit=200";
+  const rows = await api("/admin/events" + q);
+  const sel = h("select", { onchange: (e) => { filter = e.target.value; render(); } },
+    ...[["", "All"], ["block", "Blocked"], ["warn", "Flagged"]].map(([v, l]) => {
+      const o = h("option", { value: v }, l); if (v === filter) o.selected = true; return o; }));
+  return [
+    h("div", { class: "row" }, sel),
+    h("div", { class: "scroll" }, h("table", {},
+      h("thead", {}, h("tr", {}, ...["When", "Device", "Result", "Page", "Why", ""].map((t) => h("th", {}, t)))),
+      h("tbody", {}, rows.length ? rows.map((e) => h("tr", {},
+        h("td", {}, fmt(e.ts)),
+        h("td", {}, e.device_name || e.device_id),
+        h("td", {}, pill(e.verdict), " ", String(e.score)),
+        h("td", {}, h("div", {}, e.title || e.domain), h("div", { class: "muted" }, e.url)),
+        h("td", {}, e.reasons || ""),
+        h("td", {}, h("button", { onclick: async () => { await api("/admin/banned", { method: "POST", body: JSON.stringify({ domain: e.domain, reason: "from activity" }) }); render(); } }, "Ban site")),
+      )) : [h("tr", {}, h("td", { colspan: "6", class: "muted" }, "Nothing flagged yet."))]))),
+  ];
+}
+
+async function viewBans() {
+  const rows = await api("/admin/banned");
+  const input = h("input", { placeholder: "example.com", id: "newban" });
+  const add = async () => {
+    const d = input.value.trim();
+    if (!d) return;
+    await api("/admin/banned", { method: "POST", body: JSON.stringify({ domain: d }) });
+    render();
+  };
+  input.addEventListener("keydown", (e) => e.key === "Enter" && add());
+  return [
+    h("div", { class: "row" }, input, h("button", { class: "primary", onclick: add }, "Ban site")),
+    h("p", { class: "muted" }, "Subdomains are blocked too. Browsers pick up changes within about 5 minutes."),
+    h("div", { class: "scroll" }, h("table", {},
+      h("thead", {}, h("tr", {}, ...["Domain", "Reason", "Added", ""].map((t) => h("th", {}, t)))),
+      h("tbody", {}, rows.length ? rows.map((b) => h("tr", {},
+        h("td", {}, b.domain), h("td", {}, b.reason || ""), h("td", {}, fmt(b.added_at)),
+        h("td", {}, h("button", { class: "danger", onclick: async () => { await api("/admin/banned/" + encodeURIComponent(b.domain), { method: "DELETE" }); render(); } }, "Unban")),
+      )) : [h("tr", {}, h("td", { colspan: "4", class: "muted" }, "No banned sites."))]))),
+  ];
+}
+
+async function viewDevices(stats) {
+  const rows = await api("/admin/devices");
+  const out = h("div");
+  const name = h("input", { placeholder: "Device name, e.g. Maya's laptop" });
+  const create = async () => {
+    if (!name.value.trim()) return;
+    const d = await api("/admin/devices", { method: "POST", body: JSON.stringify({ name: name.value.trim() }) });
+    out.replaceChildren(h("div", { class: "note" },
+      h("b", {}, "Device created. Copy this key now, it is not shown again."),
+      h("p", {}, "Server URL: ", h("code", {}, location.origin)),
+      h("p", {}, "Device key: ", h("code", {}, d.key)),
+      h("p", { class: "muted" }, "Paste both into the extension's options page.")));
+    const fresh = await viewDevices.table();
+    document.getElementById("devtable").replaceWith(fresh);
+  };
+  const test = h("button", { onclick: async (e) => {
+    try { const r = await api("/admin/alerts/test", { method: "POST" }); e.target.textContent = "Sent to " + r.sent_to.join(", "); }
+    catch (err) { e.target.textContent = String(err.message); }
+  } }, "Send test alert");
+  const mk = (rows) => {
+    const limit = (stats?.offline_minutes || 15) * 60;
+    return h("div", { class: "scroll", id: "devtable" }, h("table", {},
+      h("thead", {}, h("tr", {}, ...["Name", "Status", "Last seen", ""].map((t) => h("th", {}, t)))),
+      h("tbody", {}, rows.length ? rows.map((d) => {
+        const online = d.last_seen && Date.now() / 1000 - d.last_seen < limit;
+        return h("tr", {},
+          h("td", {}, d.name, h("div", { class: "muted" }, d.id)),
+          h("td", {}, pill(online ? "ok" : "warn"), " ", online ? "online" : d.last_seen ? "offline" : "never connected"),
+          h("td", {}, ago(d.last_seen)),
+          h("td", {}, h("button", { class: "danger", onclick: async () => {
+            if (confirm(`Remove ${d.name}? Its extension will stop working.`)) { await api("/admin/devices/" + d.id, { method: "DELETE" }); render(); } } }, "Remove")));
+      }) : [h("tr", {}, h("td", { colspan: "4", class: "muted" }, "No devices yet."))])));
+  };
+  viewDevices.table = async () => mk(await api("/admin/devices"));
+  return [
+    h("div", { class: "row" }, name, h("button", { class: "primary", onclick: create }, "Add device"), test),
+    out, mk(rows),
+  ];
+}
+
+async function render() {
+  $("tabs").replaceChildren(...Object.entries(tabs).map(([k, l]) =>
+    h("button", { class: k === tab ? "on" : "", onclick: () => { tab = k; render(); } }, l)));
+  try {
+    const stats = await renderCards();
+    const nodes = await { activity: viewActivity, bans: viewBans, devices: () => viewDevices(stats) }[tab]();
+    $("view").replaceChildren(...nodes);
+  } catch (e) { if (e.message !== "unauthorized") $("view").replaceChildren(h("p", {}, "Error: " + e.message)); }
+}
+
+async function start() {
+  $("login").hidden = true; $("app").hidden = false;
+  await render();
+}
+
+$("go").onclick = async () => {
+  KEY = $("key").value;
+  try { await api("/admin/stats"); try { localStorage.setItem("shepherd_key", KEY); } catch {} start(); }
+  catch { $("err").textContent = "That key didn't work."; $("login").hidden = false; }
+};
+$("key").addEventListener("keydown", (e) => e.key === "Enter" && $("go").click());
+$("logout").onclick = signOut;
+setInterval(() => { if (!$("app").hidden && document.visibilityState === "visible" && document.activeElement?.tagName !== "INPUT") render(); }, 30000);
+
+if (KEY) api("/admin/stats").then(start).catch(() => { $("login").hidden = false; });
+else $("login").hidden = false;
+</script>
+</body>
+</html>

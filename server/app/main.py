@@ -1,21 +1,42 @@
+import asyncio
+import logging
 import secrets
+from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from . import config
+from . import alerts, config
 from .db import connect, init_db, now
 from .scoring import score_page, verdict_for
 
-app = FastAPI(title="Shepherd")
+log = logging.getLogger("shepherd")
+STATIC = Path(__file__).parent / "static"
 
 
-@app.on_event("startup")
-def _startup() -> None:
+async def _watch_devices() -> None:
+    while True:
+        await asyncio.sleep(60)
+        try:
+            await asyncio.to_thread(alerts.check_offline)
+        except Exception:
+            log.exception("offline check failed")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
     if not config.ADMIN_KEY:
         raise RuntimeError("Set SHEPHERD_ADMIN_KEY before starting the server")
     init_db()
+    task = asyncio.create_task(_watch_devices())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="Shepherd", lifespan=lifespan)
 
 
 def admin(x_admin_key: str = Header(default="")) -> None:
@@ -23,12 +44,14 @@ def admin(x_admin_key: str = Header(default="")) -> None:
         raise HTTPException(401, "bad admin key")
 
 
-def device(x_device_key: str = Header(default="")) -> str:
+def device(x_device_key: str = Header(default="")) -> dict:
+    """Authenticate a client and record that it checked in."""
     with connect() as db:
-        row = db.execute("SELECT id FROM devices WHERE key = ?", (x_device_key,)).fetchone()
-    if not row:
-        raise HTTPException(401, "unknown device")
-    return row["id"]
+        row = db.execute("SELECT id, name FROM devices WHERE key = ?", (x_device_key,)).fetchone()
+        if not row:
+            raise HTTPException(401, "unknown device")
+        db.execute("UPDATE devices SET last_seen = ? WHERE id = ?", (now(), row["id"]))
+    return dict(row)
 
 
 def domain_of(url: str) -> str:
@@ -42,6 +65,11 @@ def is_banned(db, domain: str) -> bool:
     return db.execute(f"SELECT 1 FROM banned_domains WHERE domain IN ({q})", candidates).fetchone() is not None
 
 
+@app.get("/", include_in_schema=False)
+def dashboard() -> FileResponse:
+    return FileResponse(STATIC / "index.html")
+
+
 # ---- client API (extension / android app) ----
 
 class PageReport(BaseModel):
@@ -51,7 +79,7 @@ class PageReport(BaseModel):
 
 
 @app.post("/api/check")
-def check(report: PageReport, device_id: str = Depends(device)) -> dict:
+def check(report: PageReport, background: BackgroundTasks, dev: dict = Depends(device)) -> dict:
     domain = domain_of(report.url)
     with connect() as db:
         if is_banned(db, domain):
@@ -69,13 +97,15 @@ def check(report: PageReport, device_id: str = Depends(device)) -> dict:
             db.execute(
                 "INSERT INTO events (device_id, ts, url, domain, title, score, verdict, reasons)"
                 " VALUES (?,?,?,?,?,?,?,?)",
-                (device_id, now(), report.url, domain, report.title, score, verdict, "; ".join(reasons)),
+                (dev["id"], now(), report.url, domain, report.title, score, verdict, "; ".join(reasons)),
             )
+    if verdict != "allow" and alerts.should_alert(verdict):
+        background.add_task(alerts.notify_event, dev["name"], report.url, domain, verdict, score, reasons)
     return {"verdict": verdict, "score": score, "reasons": reasons}
 
 
 @app.get("/api/banned")
-def banned(_: str = Depends(device)) -> dict:
+def banned(_: dict = Depends(device)) -> dict:
     with connect() as db:
         rows = db.execute("SELECT domain FROM banned_domains ORDER BY domain").fetchall()
     return {"domains": [r["domain"] for r in rows]}
@@ -93,14 +123,39 @@ def add_device(body: NewDevice) -> dict:
     dev_id, key = secrets.token_hex(4), secrets.token_urlsafe(32)
     with connect() as db:
         db.execute(
-            "INSERT INTO devices VALUES (?,?,?,?,?)", (dev_id, body.name, body.kind, key, now())
+            "INSERT INTO devices (id, name, kind, key, created_at) VALUES (?,?,?,?,?)",
+            (dev_id, body.name, body.kind, key, now()),
         )
     return {"id": dev_id, "key": key}
+
+
+@app.get("/admin/devices", dependencies=[Depends(admin)])
+def list_devices() -> list[dict]:
+    with connect() as db:
+        rows = db.execute(
+            "SELECT id, name, kind, created_at, last_seen FROM devices ORDER BY created_at"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.delete("/admin/devices/{dev_id}", dependencies=[Depends(admin)])
+def delete_device(dev_id: str) -> dict:
+    with connect() as db:
+        db.execute("DELETE FROM devices WHERE id = ?", (dev_id,))
+    alerts._offline.discard(dev_id)
+    return {"ok": True}
 
 
 class Ban(BaseModel):
     domain: str
     reason: str = "manual"
+
+
+@app.get("/admin/banned", dependencies=[Depends(admin)])
+def list_banned() -> list[dict]:
+    with connect() as db:
+        rows = db.execute("SELECT domain, reason, added_at FROM banned_domains ORDER BY domain").fetchall()
+    return [dict(r) for r in rows]
 
 
 @app.post("/admin/banned", dependencies=[Depends(admin)])
@@ -122,11 +177,46 @@ def unban(domain: str) -> dict:
 
 @app.get("/admin/events", dependencies=[Depends(admin)])
 def events(limit: int = 100, verdict: str | None = None) -> list[dict]:
-    sql, args = "SELECT * FROM events", []
+    sql = "SELECT e.*, d.name AS device_name FROM events e LEFT JOIN devices d ON d.id = e.device_id"
+    args: list = []
     if verdict:
-        sql += " WHERE verdict = ?"
+        sql += " WHERE e.verdict = ?"
         args.append(verdict)
-    sql += " ORDER BY ts DESC LIMIT ?"
+    sql += " ORDER BY e.ts DESC LIMIT ?"
     args.append(min(limit, 1000))
     with connect() as db:
         return [dict(r) for r in db.execute(sql, args).fetchall()]
+
+
+@app.get("/admin/stats", dependencies=[Depends(admin)])
+def stats() -> dict:
+    since = now() - 86400
+    with connect() as db:
+        by_verdict = {
+            r["verdict"]: r["n"]
+            for r in db.execute(
+                "SELECT verdict, COUNT(*) n FROM events WHERE ts > ? GROUP BY verdict", (since,)
+            )
+        }
+        top = [
+            dict(r)
+            for r in db.execute(
+                "SELECT domain, COUNT(*) n FROM events WHERE ts > ? GROUP BY domain ORDER BY n DESC LIMIT 5",
+                (since,),
+            )
+        ]
+    return {
+        "last_24h": {"warn": by_verdict.get("warn", 0), "block": by_verdict.get("block", 0)},
+        "top_domains": top,
+        "alert_channels": alerts.configured(),
+        "offline_minutes": config.OFFLINE_MINUTES,
+    }
+
+
+@app.post("/admin/alerts/test", dependencies=[Depends(admin)])
+def test_alert() -> dict:
+    channels = alerts.configured()
+    if not channels:
+        raise HTTPException(400, "no alert channel configured")
+    alerts.send("Shepherd test alert", "If you can read this, alerts are working.")
+    return {"sent_to": channels}

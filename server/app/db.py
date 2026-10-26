@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS devices (
     name TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'browser',
     key TEXT NOT NULL UNIQUE,
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    last_seen REAL
 );
 CREATE TABLE IF NOT EXISTS banned_domains (
     domain TEXT PRIMARY KEY,
@@ -37,6 +38,9 @@ def init_db() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     with connect() as db:
         db.executescript(SCHEMA)
+        cols = {r["name"] for r in db.execute("PRAGMA table_info(devices)")}
+        if "last_seen" not in cols:
+            db.execute("ALTER TABLE devices ADD COLUMN last_seen REAL")
 
 
 @contextmanager
