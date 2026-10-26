@@ -1,9 +1,11 @@
 services:
-  server:
+  shepherd:
     build: ./server
     restart: unless-stopped
     ports: ["8080:8080"]
     environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
       SHEPHERD_ADMIN_KEY: ${SHEPHERD_ADMIN_KEY:?set in .env}
       SHEPHERD_AUTO_BAN: ${SHEPHERD_AUTO_BAN:-false}
     volumes: ["./data:/data"]
