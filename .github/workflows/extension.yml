@@ -1,0 +1,43 @@
+name: extension
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: ["extension/**", ".github/workflows/extension.yml"]
+  pull_request:
+    paths: ["extension/**", ".github/workflows/extension.yml"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate manifest and scripts
+        working-directory: extension
+        run: |
+          node -e '
+            const m = require("./manifest.json");
+            if (m.manifest_version !== 3) throw new Error("must be MV3");
+            const fs = require("fs");
+            const files = [m.background.service_worker, m.options_page,
+              ...m.content_scripts.flatMap(c => c.js),
+              ...m.web_accessible_resources.flatMap(r => r.resources)];
+            for (const f of files) if (!fs.existsSync(f)) throw new Error("missing " + f);
+          '
+          for f in *.js; do node --check "$f"; done
+      - name: Package
+        run: |
+          VERSION=$(node -p 'require("./extension/manifest.json").version')
+          cd extension && zip -r "../extension-${VERSION}.zip" . -x '*.DS_Store'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension
+          path: extension-*.zip
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: extension-*.zip
