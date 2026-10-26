@@ -46,3 +46,8 @@ Load `extension/` unpacked, open its options page, enter the server URL and the 
 - `POST /admin/banned {"domain": "..."}` / `DELETE /admin/banned/{domain}`
 - `GET /admin/events?verdict=block`
 - `SHEPHERD_AUTO_BAN=true` bans a domain automatically when a page scores as block.
+
+## Extension releases
+Every push to `main` that builds the extension publishes a GitHub release `extension-v<version>`
+(from `extension/manifest.json`) with `shepherd-extension-<version>.zip` attached. If that version
+already has a release the step is skipped, so bump the version when you change the extension.
