@@ -97,6 +97,7 @@ class PageReport(BaseModel):
     url: str
     title: str = ""
     text: str = Field(default="", max_length=config.MAX_TEXT_CHARS)
+    rating: str = Field(default="", max_length=200)  # the page's <meta name="rating"> label, if any
 
 
 @app.post("/api/check")
@@ -107,7 +108,7 @@ def check(report: PageReport, background: BackgroundTasks, dev: dict = Depends(d
         if banned_reason:
             score, reasons, verdict = 100, [banned_reason], "block"
         else:
-            res = score_page(report.url, report.title, report.text)
+            res = score_page(report.url, report.title, report.text, report.rating)
             score, reasons = res.score, res.reasons
             verdict = verdict_for(score, config.WARN_SCORE, config.BLOCK_SCORE)
             if verdict == "block" and config.AUTO_BAN and domain:

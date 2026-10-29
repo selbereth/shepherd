@@ -183,3 +183,18 @@ def test_adblock_list_version_allowlist_and_proceed(client, dev, monkeypatch):
     client.post("/api/proceed", json={"url": "https://tracker.test/x"}, headers=dev)
     ev = client.get("/admin/events?verdict=allow", headers=ADMIN).json()
     assert any(e["reasons"] == "proceeded past ad/tracker/malware block" for e in ev)
+
+
+def test_content_scoring_signals(client, dev):
+    def post(url, title, text, rating=""):
+        return client.post("/api/check", json={"url": url, "title": title, "text": text, "rating": rating}, headers=dev).json()
+
+    # Self-labeled adult page with almost no text is still blocked.
+    r = post("https://unlisted-site.example/", "Videos", "Sign in Categories", "RTA-5042-1996-1400-1577-RTA")
+    assert r["verdict"] == "block" and "labeled adult" in r["reasons"][0]
+
+    # A page saturated with explicit terms blocks; a news article mentioning a few only warns.
+    assert post("https://unlisted-two.example/", "x", "porn xxx hentai nsfw " * 10)["verdict"] == "block"
+    news = "State passes porn age-check law. Critics say the xxx rules are vague and the porn industry will resist. " * 1
+    assert post("https://news.example/a", "Law", news)["verdict"] in ("warn", "allow")
+    assert post("https://news.example/b", "Recipes", "pasta " * 200, "general")["verdict"] == "allow"

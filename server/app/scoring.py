@@ -26,7 +26,15 @@ class Result:
     reasons: list[str] = field(default_factory=list)
 
 
-def score_page(url: str, title: str, text: str) -> Result:
+# Pages that label themselves adult (the RTA standard, or an explicit "adult" rating meta tag).
+ADULT_RATING = re.compile(r"rta-5042-1996-1400-1577-rta|\badult\b|\bmature\b|\b18\+|\bexplicit\b")
+# Explicit terms counted by how often they appear, not just whether they do.
+EXPLICIT_TERMS = re.compile(r"\bporn\w*|\bxxx\b|\bhentai\b|\bcum ?shots?\b|\bblowjobs?\b|\bcreampie\b|\bnsfw\b")
+DENSITY_MIN_HITS = 8  # a news article mentions these a few times; an adult site saturates the page
+DENSITY_PER_1000_WORDS = 5
+
+
+def score_page(url: str, title: str, text: str, rating: str = "") -> Result:
     haystack = f"{url}\n{title}\n{text}".lower()
     res = Result()
     host = urlsplit(url).hostname or ""
@@ -34,6 +42,15 @@ def score_page(url: str, title: str, text: str) -> Result:
         res.score = 100
         res.reasons.append(f"adult site name: {host}")
         return res
+    if ADULT_RATING.search(rating.lower()):
+        res.score = 100
+        res.reasons.append(f"page is labeled adult: {rating[:60]}")
+        return res
+    hits = len(EXPLICIT_TERMS.findall(haystack))
+    words = max(len(haystack.split()), 1)
+    if hits >= DENSITY_MIN_HITS and hits / words * 1000 >= DENSITY_PER_1000_WORDS:
+        res.score += 10
+        res.reasons.append(f"explicit terms: {hits} in {words} words")
     for cat, (weight, patterns) in CATEGORIES.items():
         hits = {m.group(0) for p in patterns for m in re.finditer(p, haystack)}
         if hits:
