@@ -9,6 +9,8 @@ WARN_SCORE = int(os.environ.get("SHEPHERD_WARN_SCORE", "5"))
 BLOCK_SCORE = int(os.environ.get("SHEPHERD_BLOCK_SCORE", "10"))
 # Ban the whole domain automatically when a page reaches BLOCK_SCORE.
 AUTO_BAN = os.environ.get("SHEPHERD_AUTO_BAN", "false").lower() == "true"
+# Seed the ban list with well-known adult/gambling domains (you can still unban any of them).
+BUILTIN_BLOCKLIST = os.environ.get("SHEPHERD_BUILTIN_BLOCKLIST", "true").lower() == "true"
 MAX_TEXT_CHARS = 20000
 
 # ---- alerts ----

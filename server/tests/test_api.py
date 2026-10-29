@@ -130,3 +130,10 @@ def test_days_filter(client, dev):
     assert all(e["domain"] != "old.test" for e in recent)
     assert any(e["domain"] == "old.test" for e in client.get("/admin/events", headers=ADMIN).json())
     assert client.get("/admin/stats?days=30", headers=ADMIN).json()["period"]["allow"] >= 1
+
+
+def test_known_bad_sites_are_banned_and_flagged(client, dev):
+    domains = client.get("/api/banned", headers=dev).json()["domains"]
+    assert "pornhub.com" in domains
+    r = client.post("/api/check", json={"url": "https://www.some-new-porn-site.net/", "title": "", "text": ""}, headers=dev)
+    assert r.json()["verdict"] == "block"

@@ -2,7 +2,8 @@ import sqlite3
 import time
 from contextlib import contextmanager
 
-from .config import DATA_DIR, DB_PATH
+from .blocklist import BLOCKLIST_VERSION, DOMAINS
+from .config import BUILTIN_BLOCKLIST, DATA_DIR, DB_PATH
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS devices (
@@ -29,6 +30,7 @@ CREATE TABLE IF NOT EXISTS events (
     verdict TEXT NOT NULL,
     reasons TEXT
 );
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS events_verdict ON events(verdict);
 """
@@ -41,6 +43,20 @@ def init_db() -> None:
         cols = {r["name"] for r in db.execute("PRAGMA table_info(devices)")}
         if "last_seen" not in cols:
             db.execute("ALTER TABLE devices ADD COLUMN last_seen REAL")
+        _seed_blocklist(db)
+
+
+def _seed_blocklist(db) -> None:
+    if not BUILTIN_BLOCKLIST:
+        return
+    row = db.execute("SELECT value FROM meta WHERE key = 'blocklist_version'").fetchone()
+    if row and int(row["value"]) >= BLOCKLIST_VERSION:
+        return
+    db.executemany(
+        "INSERT OR IGNORE INTO banned_domains VALUES (?, 'builtin list', ?)",
+        [(d, now()) for d in DOMAINS],
+    )
+    db.execute("INSERT OR REPLACE INTO meta VALUES ('blocklist_version', ?)", (str(BLOCKLIST_VERSION),))
 
 
 @contextmanager
