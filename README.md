@@ -29,6 +29,7 @@ services:
       SHEPHERD_WEBHOOK_URL: ""       # Slack/Discord/any JSON webhook
       SHEPHERD_ALERT_ON: "block"     # "block" or "warn" (warn also alerts on suspicious pages)
       SHEPHERD_OFFLINE_MINUTES: "15" # alert if a device stops checking in; 0 disables
+      SHEPHERD_FEED_DAYS: "7"        # re-download the published adult-site list this often
     volumes:
       - ./data:/data                 # SQLite database lives here
     healthcheck:
@@ -58,6 +59,9 @@ Configure one or more channels; unset ones are skipped.
 | `SHEPHERD_ALERT_ON` | `block` (default) or `warn` |
 | `SHEPHERD_ALERT_COOLDOWN` | Seconds before repeating the same alert, default 600 |
 | `SHEPHERD_OFFLINE_MINUTES` | Alert when a device hasn't checked in, default 15 (0 = off) |
+| `SHEPHERD_FEED_URL` | Published adult-site list (hosts or one-domain-per-line format). Default: StevenBlack/hosts porn-only. `""` disables. Larger alternative: `https://raw.githubusercontent.com/blocklistproject/Lists/master/porn.txt` |
+| `SHEPHERD_FEED_DAYS` | How often to re-download that list, default 7 |
+| `SHEPHERD_BUILTIN_BLOCKLIST` | Seed the ban list with well-known adult/gambling sites, default true |
 
 The offline alert catches a laptop that is off, off the network, or whose extension was disabled or removed.
 

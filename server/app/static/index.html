@@ -133,7 +133,14 @@ async function viewActivity() {
 }
 
 async function viewBans() {
-  const rows = await api("/admin/banned");
+  const [rows, feed] = await Promise.all([api("/admin/banned"), api("/admin/feed")]);
+  const feedNote = h("span", { class: "muted" }, !feed.enabled ? "Published adult-site list is off."
+    : `Published adult-site list: ${feed.count.toLocaleString()} domains, updated ${ago(feed.updated)}, refreshes every ${feed.every_days} days.` + (feed.error ? ` Last error: ${feed.error}` : ""));
+  const refreshBtn = h("button", { onclick: async (e) => {
+    e.target.textContent = "Updating...";
+    try { await api("/admin/feed/refresh", { method: "POST" }); render(); }
+    catch (err) { e.target.textContent = "Failed: " + err.message; }
+  } }, "Update now");
   const input = h("input", { placeholder: "example.com", id: "newban" });
   const add = async () => {
     const d = input.value.trim();
@@ -144,6 +151,7 @@ async function viewBans() {
   input.addEventListener("keydown", (e) => e.key === "Enter" && add());
   return [
     h("div", { class: "row" }, input, h("button", { class: "primary", onclick: add }, "Ban site")),
+    h("div", { class: "row" }, feedNote, feed.enabled ? refreshBtn : ""),
     h("p", { class: "muted" }, "Subdomains are blocked too. Browsers pick up changes within about 5 minutes."),
     h("div", { class: "scroll" }, h("table", {},
       h("thead", {}, h("tr", {}, ...["Domain", "Reason", "Added", ""].map((t) => h("th", {}, t)))),

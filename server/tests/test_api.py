@@ -137,3 +137,21 @@ def test_known_bad_sites_are_banned_and_flagged(client, dev):
     assert "pornhub.com" in domains
     r = client.post("/api/check", json={"url": "https://www.some-new-porn-site.net/", "title": "", "text": ""}, headers=dev)
     assert r.json()["verdict"] == "block"
+
+
+def test_feed_parse_and_check(client, dev, monkeypatch):
+    from app import feeds
+
+    text = "# c\n127.0.0.1 localhost\n0.0.0.0 adult-feed-one.test\n0.0.0.0 www.adult-feed-two.test # x\nplain-three.test\n"
+    assert feeds.parse(text) == {"adult-feed-one.test", "adult-feed-two.test", "plain-three.test"}
+
+    domains = {f"feed{i}.test" for i in range(150)} | {"adult-feed-one.test"}
+    monkeypatch.setattr(config, "FEED_URL", "http://x")
+    monkeypatch.setattr(feeds, "_download", lambda url: "\n".join("0.0.0.0 " + d for d in domains))
+    assert client.post("/admin/feed/refresh", headers=ADMIN).json()["count"] == 151
+    r = check(client, dev, "https://cdn.adult-feed-one.test/page")
+    assert r["verdict"] == "block" and r["reasons"] == ["on adult site list"]
+
+    monkeypatch.setattr(feeds, "_download", lambda url: "0.0.0.0 only-one.test")
+    assert client.post("/admin/feed/refresh", headers=ADMIN).status_code == 502
+    assert check(client, dev, "https://adult-feed-one.test")["verdict"] == "block"  # old list kept

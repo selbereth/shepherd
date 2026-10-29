@@ -9,7 +9,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from . import alerts, config
+from . import alerts, config, feeds
 from .db import connect, init_db, now
 from .scoring import score_page, verdict_for
 
@@ -26,14 +26,27 @@ async def _watch_devices() -> None:
             log.exception("offline check failed")
 
 
+async def _watch_feed() -> None:
+    """Refresh the published adult list when it is older than FEED_DAYS (checked hourly)."""
+    while True:
+        try:
+            if await asyncio.to_thread(feeds.is_stale):
+                await asyncio.to_thread(feeds.refresh)
+        except Exception as e:
+            log.exception("feed refresh failed")
+            await asyncio.to_thread(feeds.record_error, f"{type(e).__name__}: {e}")
+        await asyncio.sleep(3600)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     if not config.ADMIN_KEY:
         raise RuntimeError("Set SHEPHERD_ADMIN_KEY before starting the server")
     init_db()
-    task = asyncio.create_task(_watch_devices())
+    tasks = [asyncio.create_task(_watch_devices()), asyncio.create_task(_watch_feed())]
     yield
-    task.cancel()
+    for t in tasks:
+        t.cancel()
 
 
 app = FastAPI(title="Shepherd", lifespan=lifespan)
@@ -58,11 +71,16 @@ def domain_of(url: str) -> str:
     return (urlsplit(url).hostname or "").lower().removeprefix("www.")
 
 
-def is_banned(db, domain: str) -> bool:
+def is_banned(db, domain: str) -> str:
+    """Return why the domain is banned ('' if it is not)."""
     parts = domain.split(".")
     candidates = [".".join(parts[i:]) for i in range(len(parts) - 1)] or [domain]
     q = ",".join("?" * len(candidates))
-    return db.execute(f"SELECT 1 FROM banned_domains WHERE domain IN ({q})", candidates).fetchone() is not None
+    if db.execute(f"SELECT 1 FROM banned_domains WHERE domain IN ({q})", candidates).fetchone():
+        return "banned domain"
+    if db.execute(f"SELECT 1 FROM feed_domains WHERE domain IN ({q})", candidates).fetchone():
+        return "on adult site list"
+    return ""
 
 
 @app.get("/", include_in_schema=False)
@@ -82,8 +100,9 @@ class PageReport(BaseModel):
 def check(report: PageReport, background: BackgroundTasks, dev: dict = Depends(device)) -> dict:
     domain = domain_of(report.url)
     with connect() as db:
-        if is_banned(db, domain):
-            score, reasons, verdict = 100, ["banned domain"], "block"
+        banned_reason = is_banned(db, domain)
+        if banned_reason:
+            score, reasons, verdict = 100, [banned_reason], "block"
         else:
             res = score_page(report.url, report.title, report.text)
             score, reasons = res.score, res.reasons
@@ -143,6 +162,23 @@ def delete_device(dev_id: str) -> dict:
         db.execute("DELETE FROM devices WHERE id = ?", (dev_id,))
     alerts._offline.discard(dev_id)
     return {"ok": True}
+
+
+@app.get("/admin/feed", dependencies=[Depends(admin)])
+def feed_status() -> dict:
+    return feeds.status()
+
+
+@app.post("/admin/feed/refresh", dependencies=[Depends(admin)])
+def feed_refresh() -> dict:
+    if not config.FEED_URL:
+        raise HTTPException(400, "no feed configured (SHEPHERD_FEED_URL is empty)")
+    try:
+        feeds.refresh()
+    except Exception as e:
+        feeds.record_error(f"{type(e).__name__}: {e}")
+        raise HTTPException(502, f"download failed: {e}")
+    return feeds.status()
 
 
 class Ban(BaseModel):

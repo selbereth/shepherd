@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS events (
     verdict TEXT NOT NULL,
     reasons TEXT
 );
+CREATE TABLE IF NOT EXISTS feed_domains (domain TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS events_verdict ON events(verdict);

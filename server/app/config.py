@@ -11,6 +11,12 @@ BLOCK_SCORE = int(os.environ.get("SHEPHERD_BLOCK_SCORE", "10"))
 AUTO_BAN = os.environ.get("SHEPHERD_AUTO_BAN", "false").lower() == "true"
 # Seed the ban list with well-known adult/gambling domains (you can still unban any of them).
 BUILTIN_BLOCKLIST = os.environ.get("SHEPHERD_BUILTIN_BLOCKLIST", "true").lower() == "true"
+# Published adult-site list, re-downloaded every FEED_DAYS days. Set FEED_URL="" to disable.
+FEED_URL = os.environ.get(
+    "SHEPHERD_FEED_URL",
+    "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/porn-only/hosts",
+)
+FEED_DAYS = float(os.environ.get("SHEPHERD_FEED_DAYS", "7"))
 MAX_TEXT_CHARS = 20000
 
 # ---- alerts ----
