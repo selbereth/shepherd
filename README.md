@@ -60,7 +60,8 @@ Configure one or more channels; unset ones are skipped.
 | `SHEPHERD_ALERT_COOLDOWN` | Seconds before repeating the same alert, default 600 |
 | `SHEPHERD_OFFLINE_MINUTES` | Alert when a device hasn't checked in, default 15 (0 = off) |
 | `SHEPHERD_FEED_URL` | Published adult-site list (hosts or one-domain-per-line format). Default: StevenBlack/hosts porn-only. `""` disables. Larger alternative: `https://raw.githubusercontent.com/blocklistproject/Lists/master/porn.txt` |
-| `SHEPHERD_FEED_DAYS` | How often to re-download that list, default 7 |
+| `SHEPHERD_FEED_DAYS` | How often to re-download the published lists, default 7 |
+| `SHEPHERD_ADS_FEED_URL` | Ad/tracker/malware list for uBlock-style blocking in the extension. Default: StevenBlack/hosts. `""` disables. Manage exceptions on the "Ad & tracker blocking" tab |
 | `SHEPHERD_BUILTIN_BLOCKLIST` | Seed the ban list with well-known adult/gambling sites, default true |
 
 The offline alert catches a laptop that is off, off the network, or whose extension was disabled or removed.

@@ -92,7 +92,7 @@ let tab = "activity", filter = "", days = 1;
 try { days = Number(localStorage.getItem("shepherd_days")) || 1; } catch {}
 const RANGES = [[1, "Last 24 hours"], [7, "Last 7 days"], [30, "Last 30 days"], [90, "Last 90 days"], [0, "All time"]];
 const rangeLabel = () => (RANGES.find(([d]) => d === days) || RANGES[0])[1].toLowerCase();
-const tabs = { activity: "Activity", bans: "Banned sites", devices: "Devices" };
+const tabs = { activity: "Activity", bans: "Banned sites", ads: "Ad & tracker blocking", devices: "Devices" };
 
 function signOut() {
   try { localStorage.removeItem("shepherd_key"); } catch {}
@@ -133,12 +133,13 @@ async function viewActivity() {
 }
 
 async function viewBans() {
-  const [rows, feed] = await Promise.all([api("/admin/banned"), api("/admin/feed")]);
+  const [rows, feeds] = await Promise.all([api("/admin/banned"), api("/admin/feeds")]);
+  const feed = feeds.adult;
   const feedNote = h("span", { class: "muted" }, !feed.enabled ? "Published adult-site list is off."
     : `Published adult-site list: ${feed.count.toLocaleString()} domains, updated ${ago(feed.updated)}, refreshes every ${feed.every_days} days.` + (feed.error ? ` Last error: ${feed.error}` : ""));
   const refreshBtn = h("button", { onclick: async (e) => {
     e.target.textContent = "Updating...";
-    try { await api("/admin/feed/refresh", { method: "POST" }); render(); }
+    try { await api("/admin/feeds/adult/refresh", { method: "POST" }); render(); }
     catch (err) { e.target.textContent = "Failed: " + err.message; }
   } }, "Update now");
   const input = h("input", { placeholder: "example.com", id: "newban" });
@@ -159,6 +160,41 @@ async function viewBans() {
         h("td", {}, b.domain), h("td", {}, b.reason || ""), h("td", {}, fmt(b.added_at)),
         h("td", {}, h("button", { class: "danger", onclick: async () => { await api("/admin/banned/" + encodeURIComponent(b.domain), { method: "DELETE" }); render(); } }, "Unban")),
       )) : [h("tr", {}, h("td", { colspan: "4", class: "muted" }, "No banned sites."))]))),
+  ];
+}
+
+async function viewAds() {
+  const [feeds, allow] = await Promise.all([api("/admin/feeds"), api("/admin/adblock/allow")]);
+  const feed = feeds.ads;
+  const status = !feed.enabled ? "Ad & tracker blocking is off (SHEPHERD_ADS_FEED_URL is empty)."
+    : `List: ${feed.count.toLocaleString()} domains, updated ${ago(feed.updated)}, refreshes every ${feed.every_days} days.` + (feed.error ? ` Last error: ${feed.error}` : "");
+  const refreshBtn = h("button", { onclick: async (e) => {
+    e.target.textContent = "Updating...";
+    try { await api("/admin/feeds/ads/refresh", { method: "POST" }); render(); }
+    catch (err) { e.target.textContent = "Failed: " + err.message; }
+  } }, "Update now");
+  const input = h("input", { placeholder: "site that should not be blocked, e.g. example.com" });
+  const add = async () => {
+    const d = input.value.trim();
+    if (!d) return;
+    await api("/admin/adblock/allow", { method: "POST", body: JSON.stringify({ domain: d }) });
+    render();
+  };
+  input.addEventListener("keydown", (e) => e.key === "Enter" && add());
+  return [
+    h("div", { class: "note" },
+      "Like uBlock Origin: ads, trackers and malware domains are dropped silently from pages. If someone opens one of them directly, they get a warning page with ",
+      h("b", {}, "Proceed anyway"), " (each override shows in Activity). Adult and banned sites never get that button."),
+    h("div", { class: "row" }, h("span", { class: "muted" }, status), feed.enabled ? refreshBtn : ""),
+    h("h3", {}, "Never block these"),
+    h("p", { class: "muted" }, "Use this if a site breaks. Subdomains are included. Browsers pick up changes within about 5 minutes."),
+    h("div", { class: "row" }, input, h("button", { class: "primary", onclick: add }, "Allow")),
+    h("div", { class: "scroll" }, h("table", {},
+      h("thead", {}, h("tr", {}, ...["Domain", "Added", ""].map((t) => h("th", {}, t)))),
+      h("tbody", {}, allow.length ? allow.map((a) => h("tr", {},
+        h("td", {}, a.domain), h("td", {}, fmt(a.added_at)),
+        h("td", {}, h("button", { class: "danger", onclick: async () => { await api("/admin/adblock/allow/" + encodeURIComponent(a.domain), { method: "DELETE" }); render(); } }, "Remove")),
+      )) : [h("tr", {}, h("td", { colspan: "3", class: "muted" }, "Nothing allowlisted."))]))),
   ];
 }
 
@@ -212,7 +248,7 @@ async function render() {
     h("button", { class: k === tab ? "on" : "", onclick: () => { tab = k; render(); } }, l)), range);
   try {
     const stats = await renderCards();
-    const nodes = await { activity: viewActivity, bans: viewBans, devices: () => viewDevices(stats) }[tab]();
+    const nodes = await { activity: viewActivity, bans: viewBans, ads: viewAds, devices: () => viewDevices(stats) }[tab]();
     $("view").replaceChildren(...nodes);
   } catch (e) { if (e.message !== "unauthorized") $("view").replaceChildren(h("p", {}, "Error: " + e.message)); }
 }

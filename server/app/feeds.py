@@ -1,10 +1,12 @@
-"""Pulls a published adult-site domain list and keeps it in the feed_domains table.
+"""Pulls published domain lists into SQLite and keeps them fresh.
 
-The default is StevenBlack/hosts' porn-only list (hosts format, ~77k domains). Any
-hosts-format or one-domain-per-line URL works via SHEPHERD_FEED_URL.
+Two lists, both hosts-format or one-domain-per-line URLs:
+  adult  hard-blocked by the server (StevenBlack/hosts porn-only by default)
+  ads    ads/trackers/malware, blocked in the browser with a "proceed anyway" page
 """
 import logging
 import urllib.request
+from dataclasses import dataclass
 
 from . import config
 from .db import connect, now
@@ -12,6 +14,23 @@ from .db import connect, now
 log = logging.getLogger("shepherd")
 MAX_BYTES = 60 * 1024 * 1024
 SKIP = {"localhost", "localhost.localdomain", "local", "broadcasthost", "ip6-localhost", "ip6-loopback", "0.0.0.0"}
+
+
+@dataclass(frozen=True)
+class Feed:
+    kind: str
+    table: str  # fixed names from FEEDS below, never user input
+    meta: str
+
+    @property
+    def url(self) -> str:
+        return config.FEED_URL if self.kind == "adult" else config.ADS_FEED_URL
+
+
+FEEDS = {
+    "adult": Feed("adult", "feed_domains", "feed"),
+    "ads": Feed("ads", "ads_domains", "ads"),
+}
 
 
 def parse(text: str) -> set[str]:
@@ -38,41 +57,50 @@ def _download(url: str) -> str:
     return data.decode("utf-8", "ignore")
 
 
-def refresh() -> int:
-    """Download and swap in the feed. A failed or empty download leaves the old list untouched."""
-    domains = parse(_download(config.FEED_URL))
+def bump_rev(db) -> None:
+    """Change the ad-block version so extensions re-download (list refreshed or allowlist edited)."""
+    db.execute("INSERT OR REPLACE INTO meta VALUES ('adblock_rev', ?)", (str(now()),))
+
+
+def refresh(kind: str = "adult") -> int:
+    """Download and swap in a feed. A failed or empty download leaves the old list untouched."""
+    feed = FEEDS[kind]
+    domains = parse(_download(feed.url))
     if len(domains) < 100:
         raise ValueError(f"feed looks wrong: only {len(domains)} domains parsed")
     with connect() as db:
-        db.execute("DELETE FROM feed_domains")
-        db.executemany("INSERT INTO feed_domains VALUES (?)", ((d,) for d in sorted(domains)))
-        db.execute("INSERT OR REPLACE INTO meta VALUES ('feed_updated', ?)", (str(now()),))
-        db.execute("INSERT OR REPLACE INTO meta VALUES ('feed_count', ?)", (str(len(domains)),))
-        db.execute("DELETE FROM meta WHERE key = 'feed_error'")
-    log.info("adult feed updated: %d domains", len(domains))
+        db.execute(f"DELETE FROM {feed.table}")
+        db.executemany(f"INSERT INTO {feed.table} VALUES (?)", ((d,) for d in sorted(domains)))
+        db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (f"{feed.meta}_updated", str(now())))
+        db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (f"{feed.meta}_count", str(len(domains))))
+        db.execute("DELETE FROM meta WHERE key = ?", (f"{feed.meta}_error",))
+        if kind == "ads":
+            bump_rev(db)
+    log.info("%s feed updated: %d domains", kind, len(domains))
     return len(domains)
 
 
-def status() -> dict:
+def status(kind: str = "adult") -> dict:
+    feed = FEEDS[kind]
     with connect() as db:
-        m = {r["key"]: r["value"] for r in db.execute("SELECT key, value FROM meta WHERE key LIKE 'feed_%'")}
+        m = {r["key"]: r["value"] for r in db.execute("SELECT key, value FROM meta WHERE key LIKE ?", (feed.meta + "_%",))}
     return {
-        "enabled": bool(config.FEED_URL),
-        "url": config.FEED_URL,
-        "count": int(m.get("feed_count", 0)),
-        "updated": float(m["feed_updated"]) if "feed_updated" in m else None,
-        "error": m.get("feed_error"),
+        "enabled": bool(feed.url),
+        "url": feed.url,
+        "count": int(m.get(f"{feed.meta}_count", 0)),
+        "updated": float(m[f"{feed.meta}_updated"]) if f"{feed.meta}_updated" in m else None,
+        "error": m.get(f"{feed.meta}_error"),
         "every_days": config.FEED_DAYS,
     }
 
 
-def is_stale() -> bool:
-    if not config.FEED_URL:
+def is_stale(kind: str = "adult") -> bool:
+    if not FEEDS[kind].url:
         return False
-    updated = status()["updated"]
+    updated = status(kind)["updated"]
     return updated is None or now() - updated > config.FEED_DAYS * 86400
 
 
-def record_error(msg: str) -> None:
+def record_error(msg: str, kind: str = "adult") -> None:
     with connect() as db:
-        db.execute("INSERT OR REPLACE INTO meta VALUES ('feed_error', ?)", (msg[:300],))
+        db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (f"{FEEDS[kind].meta}_error", msg[:300]))

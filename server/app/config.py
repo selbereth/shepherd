@@ -17,6 +17,12 @@ FEED_URL = os.environ.get(
     "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/porn-only/hosts",
 )
 FEED_DAYS = float(os.environ.get("SHEPHERD_FEED_DAYS", "7"))
+# Ad/tracker/malware list for uBlock-style blocking in the extension (with a "proceed anyway" page
+# for sites you navigate to). Set ADS_FEED_URL="" to turn it off.
+ADS_FEED_URL = os.environ.get(
+    "SHEPHERD_ADS_FEED_URL",
+    "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
+)
 MAX_TEXT_CHARS = 20000
 
 # ---- alerts ----

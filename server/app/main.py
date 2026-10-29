@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -27,14 +28,15 @@ async def _watch_devices() -> None:
 
 
 async def _watch_feed() -> None:
-    """Refresh the published adult list when it is older than FEED_DAYS (checked hourly)."""
+    """Refresh each published list when it is older than FEED_DAYS (checked hourly)."""
     while True:
-        try:
-            if await asyncio.to_thread(feeds.is_stale):
-                await asyncio.to_thread(feeds.refresh)
-        except Exception as e:
-            log.exception("feed refresh failed")
-            await asyncio.to_thread(feeds.record_error, f"{type(e).__name__}: {e}")
+        for kind in feeds.FEEDS:
+            try:
+                if await asyncio.to_thread(feeds.is_stale, kind):
+                    await asyncio.to_thread(feeds.refresh, kind)
+            except Exception as e:
+                log.exception("%s feed refresh failed", kind)
+                await asyncio.to_thread(feeds.record_error, f"{type(e).__name__}: {e}", kind)
         await asyncio.sleep(3600)
 
 
@@ -50,6 +52,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Shepherd", lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 def admin(x_admin_key: str = Header(default="")) -> None:
@@ -129,6 +132,41 @@ def banned(_: dict = Depends(device)) -> dict:
     return {"domains": [r["domain"] for r in rows]}
 
 
+def _under(domain: str, parent: str) -> bool:
+    return domain == parent or domain.endswith("." + parent)
+
+
+@app.get("/api/adblock")
+def adblock(since: str = "", _: dict = Depends(device)) -> dict:
+    """Ad/tracker/malware domains for the extension. Sends the list only when it changed since `since`."""
+    with connect() as db:
+        row = db.execute("SELECT value FROM meta WHERE key = 'adblock_rev'").fetchone()
+        version = row["value"] if row else "0"
+        if since == version:
+            return {"version": version, "domains": None}
+        allow = [r["domain"] for r in db.execute("SELECT domain FROM ads_allow")]
+        rows = db.execute("SELECT domain FROM ads_domains ORDER BY domain").fetchall()
+    domains = [r["domain"] for r in rows if not any(_under(r["domain"], a) for a in allow)]
+    return {"version": version, "domains": domains}
+
+
+class Proceed(BaseModel):
+    url: str
+
+
+@app.post("/api/proceed")
+def proceed(body: Proceed, dev: dict = Depends(device)) -> dict:
+    """The user clicked 'proceed anyway' past an ad/tracker/malware block; keep a record."""
+    domain = domain_of(body.url)
+    with connect() as db:
+        db.execute(
+            "INSERT INTO events (device_id, ts, url, domain, title, score, verdict, reasons)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (dev["id"], now(), body.url, domain, "", 0, "allow", "proceeded past ad/tracker/malware block"),
+        )
+    return {"ok": True}
+
+
 # ---- admin API ----
 
 class NewDevice(BaseModel):
@@ -164,26 +202,53 @@ def delete_device(dev_id: str) -> dict:
     return {"ok": True}
 
 
-@app.get("/admin/feed", dependencies=[Depends(admin)])
-def feed_status() -> dict:
-    return feeds.status()
-
-
-@app.post("/admin/feed/refresh", dependencies=[Depends(admin)])
-def feed_refresh() -> dict:
-    if not config.FEED_URL:
-        raise HTTPException(400, "no feed configured (SHEPHERD_FEED_URL is empty)")
-    try:
-        feeds.refresh()
-    except Exception as e:
-        feeds.record_error(f"{type(e).__name__}: {e}")
-        raise HTTPException(502, f"download failed: {e}")
-    return feeds.status()
-
-
 class Ban(BaseModel):
     domain: str
     reason: str = "manual"
+
+
+@app.get("/admin/feeds", dependencies=[Depends(admin)])
+def feed_status() -> dict:
+    return {kind: feeds.status(kind) for kind in feeds.FEEDS}
+
+
+@app.post("/admin/feeds/{kind}/refresh", dependencies=[Depends(admin)])
+def feed_refresh(kind: str) -> dict:
+    if kind not in feeds.FEEDS:
+        raise HTTPException(404, "unknown feed")
+    if not feeds.FEEDS[kind].url:
+        raise HTTPException(400, "feed is turned off (its URL setting is empty)")
+    try:
+        feeds.refresh(kind)
+    except Exception as e:
+        feeds.record_error(f"{type(e).__name__}: {e}", kind)
+        raise HTTPException(502, f"download failed: {e}")
+    return feeds.status(kind)
+
+
+@app.get("/admin/adblock/allow", dependencies=[Depends(admin)])
+def list_ads_allow() -> list[dict]:
+    with connect() as db:
+        return [dict(r) for r in db.execute("SELECT domain, added_at FROM ads_allow ORDER BY domain")]
+
+
+@app.post("/admin/adblock/allow", dependencies=[Depends(admin)])
+def add_ads_allow(body: Ban) -> dict:
+    domain = body.domain.strip().lower().removeprefix("www.")
+    if not domain:
+        raise HTTPException(400, "domain required")
+    with connect() as db:
+        db.execute("INSERT OR REPLACE INTO ads_allow VALUES (?, ?)", (domain, now()))
+        feeds.bump_rev(db)
+    return {"ok": True}
+
+
+@app.delete("/admin/adblock/allow/{domain}", dependencies=[Depends(admin)])
+def remove_ads_allow(domain: str) -> dict:
+    with connect() as db:
+        db.execute("DELETE FROM ads_allow WHERE domain = ?", (domain.lower(),))
+        feeds.bump_rev(db)
+    return {"ok": True}
 
 
 @app.get("/admin/banned", dependencies=[Depends(admin)])

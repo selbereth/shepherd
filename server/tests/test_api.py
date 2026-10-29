@@ -148,10 +148,38 @@ def test_feed_parse_and_check(client, dev, monkeypatch):
     domains = {f"feed{i}.test" for i in range(150)} | {"adult-feed-one.test"}
     monkeypatch.setattr(config, "FEED_URL", "http://x")
     monkeypatch.setattr(feeds, "_download", lambda url: "\n".join("0.0.0.0 " + d for d in domains))
-    assert client.post("/admin/feed/refresh", headers=ADMIN).json()["count"] == 151
+    assert client.post("/admin/feeds/adult/refresh", headers=ADMIN).json()["count"] == 151
     r = check(client, dev, "https://cdn.adult-feed-one.test/page")
     assert r["verdict"] == "block" and r["reasons"] == ["on adult site list"]
 
     monkeypatch.setattr(feeds, "_download", lambda url: "0.0.0.0 only-one.test")
-    assert client.post("/admin/feed/refresh", headers=ADMIN).status_code == 502
+    assert client.post("/admin/feeds/adult/refresh", headers=ADMIN).status_code == 502
     assert check(client, dev, "https://adult-feed-one.test")["verdict"] == "block"  # old list kept
+
+
+def test_adblock_list_version_allowlist_and_proceed(client, dev, monkeypatch):
+    from app import feeds
+
+    assert client.get("/api/adblock").status_code == 401
+    domains = {f"ads{i}.test" for i in range(150)} | {"tracker.test", "cdn.keepme.test"}
+    monkeypatch.setattr(config, "ADS_FEED_URL", "http://x")
+    monkeypatch.setattr(feeds, "_download", lambda url: "\n".join("0.0.0.0 " + d for d in domains))
+    assert client.post("/admin/feeds/ads/refresh", headers=ADMIN).json()["count"] == 152
+
+    first = client.get("/api/adblock", headers=dev).json()
+    assert "tracker.test" in first["domains"] and "cdn.keepme.test" in first["domains"]
+    # unchanged -> no list sent
+    assert client.get("/api/adblock?since=" + first["version"], headers=dev).json()["domains"] is None
+
+    # allowlisting a parent domain removes it (and subdomains) and bumps the version
+    client.post("/admin/adblock/allow", json={"domain": "keepme.test"}, headers=ADMIN)
+    second = client.get("/api/adblock?since=" + first["version"], headers=dev).json()
+    assert second["version"] != first["version"]
+    assert "cdn.keepme.test" not in second["domains"] and "tracker.test" in second["domains"]
+
+    # ads domains don't hard-block on the server
+    assert check(client, dev, "https://tracker.test/")["verdict"] == "allow"
+
+    client.post("/api/proceed", json={"url": "https://tracker.test/x"}, headers=dev)
+    ev = client.get("/admin/events?verdict=allow", headers=ADMIN).json()
+    assert any(e["reasons"] == "proceeded past ad/tracker/malware block" for e in ev)

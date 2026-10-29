@@ -1,8 +1,17 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>Blocked</title>
-<style>body{font-family:system-ui;max-width:32rem;margin:15vh auto;text-align:center}</style>
-<h1>This site is blocked</h1>
+<style>
+  body{font-family:system-ui;max-width:32rem;margin:15vh auto;text-align:center;padding:0 1rem}
+  button{font:inherit;padding:.5rem 1rem;margin:.3rem;cursor:pointer}
+  #d{word-break:break-all}
+</style>
+<h1 id="title">This site is blocked</h1>
 <p id="d"></p>
-<p>If you think this is a mistake, ask a parent.</p>
+<p id="msg">If you think this is a mistake, ask a parent.</p>
+<div id="actions" hidden>
+  <button id="back">Go back</button>
+  <button id="proceed">Proceed anyway</button>
+</div>
+<p id="err"></p>
 <script src="blocked.js"></script>
