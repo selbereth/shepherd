@@ -10,6 +10,5 @@
     { "matches": ["http://*/*", "https://*/*"], "js": ["content.js"], "run_at": "document_idle" }
   ],
   "options_page": "options.html",
-  "storage": { "managed_schema": "schema.json" },
   "web_accessible_resources": [{ "resources": ["blocked.html"], "matches": ["<all_urls>"] }]
 }

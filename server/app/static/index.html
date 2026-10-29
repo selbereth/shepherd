@@ -35,7 +35,6 @@
   #login input { width:100%; margin:.6rem 0; }
   .scroll { overflow-x:auto; }
   .note { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:.8rem 1rem; margin-bottom:.8rem; }
-  pre { background:var(--bg); padding:.5rem; border-radius:6px; overflow-x:auto; margin:.4rem 0; }
   code { background:var(--bg); padding:.1rem .3rem; border-radius:4px; word-break:break-all; }
 </style>
 </head>
@@ -162,10 +161,7 @@ async function viewDevices(stats) {
       h("b", {}, "Device created. Copy this key now, it is not shown again."),
       h("p", {}, "Server URL: ", h("code", {}, location.origin)),
       h("p", {}, "Device key: ", h("code", {}, d.key)),
-      h("p", { class: "muted" }, "Paste both into the extension's options page, or push them with a managed policy:"),
-      h("p", {}, "Google Admin console: Devices > Chrome > Apps & extensions > Users & browsers > Shepherd > Policy for extensions:"),
-      h("pre", {}, h("code", {}, JSON.stringify({ server: { Value: location.origin }, key: { Value: d.key } }, null, 2))),
-      h("button", { onclick: (e) => { navigator.clipboard.writeText(JSON.stringify({ server: { Value: location.origin }, key: { Value: d.key } })); e.target.textContent = "Copied"; } }, "Copy policy JSON")));
+      h("p", { class: "muted" }, "Paste both into the extension's options page.")));
     const fresh = await viewDevices.table();
     document.getElementById("devtable").replaceWith(fresh);
   };
