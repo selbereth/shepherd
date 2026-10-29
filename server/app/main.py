@@ -93,12 +93,11 @@ def check(report: PageReport, background: BackgroundTasks, dev: dict = Depends(d
                     "INSERT OR IGNORE INTO banned_domains VALUES (?, ?, ?)",
                     (domain, "auto: " + "; ".join(reasons), now()),
                 )
-        if verdict != "allow":
-            db.execute(
-                "INSERT INTO events (device_id, ts, url, domain, title, score, verdict, reasons)"
-                " VALUES (?,?,?,?,?,?,?,?)",
-                (dev["id"], now(), report.url, domain, report.title, score, verdict, "; ".join(reasons)),
-            )
+        db.execute(
+            "INSERT INTO events (device_id, ts, url, domain, title, score, verdict, reasons)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (dev["id"], now(), report.url, domain, report.title, score, verdict, "; ".join(reasons)),
+        )
     if verdict != "allow" and alerts.should_alert(verdict):
         background.add_task(alerts.notify_event, dev["name"], report.url, domain, verdict, score, reasons)
     return {"verdict": verdict, "score": score, "reasons": reasons}
@@ -201,12 +200,16 @@ def stats() -> dict:
         top = [
             dict(r)
             for r in db.execute(
-                "SELECT domain, COUNT(*) n FROM events WHERE ts > ? GROUP BY domain ORDER BY n DESC LIMIT 5",
+                "SELECT domain, COUNT(*) n FROM events WHERE ts > ? AND verdict != 'allow' GROUP BY domain ORDER BY n DESC LIMIT 5",
                 (since,),
             )
         ]
     return {
-        "last_24h": {"warn": by_verdict.get("warn", 0), "block": by_verdict.get("block", 0)},
+        "last_24h": {
+            "allow": by_verdict.get("allow", 0),
+            "warn": by_verdict.get("warn", 0),
+            "block": by_verdict.get("block", 0),
+        },
         "top_domains": top,
         "alert_channels": alerts.configured(),
         "offline_minutes": config.OFFLINE_MINUTES,

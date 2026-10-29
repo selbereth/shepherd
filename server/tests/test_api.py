@@ -113,3 +113,10 @@ def test_test_alert_requires_channel(client, monkeypatch):
 def test_dashboard_served(client):
     r = client.get("/")
     assert r.status_code == 200 and "Shepherd" in r.text
+
+
+def test_allowed_visits_are_logged(client, dev):
+    r = client.post("/api/check", json={"url": "https://example.org/", "title": "hi", "text": "hello"}, headers=dev)
+    assert r.json()["verdict"] == "allow"
+    ev = client.get("/admin/events?verdict=allow", headers=ADMIN).json()
+    assert any(e["domain"] == "example.org" for e in ev)

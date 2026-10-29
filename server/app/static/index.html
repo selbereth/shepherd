@@ -99,9 +99,10 @@ function signOut() {
 async function renderCards() {
   const s = await api("/admin/stats");
   $("cards").replaceChildren(
+    h("div", { class: "card" }, h("b", {}, String(s.last_24h.allow + s.last_24h.warn + s.last_24h.block)), "Pages visited (24h)"),
     h("div", { class: "card" }, h("b", {}, String(s.last_24h.block)), "Blocked (24h)"),
     h("div", { class: "card" }, h("b", {}, String(s.last_24h.warn)), "Flagged (24h)"),
-    h("div", { class: "card" }, "Top: ", s.top_domains.length ? s.top_domains.map((d) => `${d.domain} (${d.n})`).join(", ") : "nothing yet"),
+    h("div", { class: "card" }, "Top flagged: ", s.top_domains.length ? s.top_domains.map((d) => `${d.domain} (${d.n})`).join(", ") : "nothing yet"),
   );
   $("alertinfo").textContent = s.alert_channels.length ? "Alerts: " + s.alert_channels.join(", ") : "Alerts: not configured";
   return s;
@@ -111,7 +112,7 @@ async function viewActivity() {
   const q = filter ? `?verdict=${filter}&limit=200` : "?limit=200";
   const rows = await api("/admin/events" + q);
   const sel = h("select", { onchange: (e) => { filter = e.target.value; render(); } },
-    ...[["", "All"], ["block", "Blocked"], ["warn", "Flagged"]].map(([v, l]) => {
+    ...[["", "All visits"], ["block", "Blocked"], ["warn", "Flagged"], ["allow", "Allowed"]].map(([v, l]) => {
       const o = h("option", { value: v }, l); if (v === filter) o.selected = true; return o; }));
   return [
     h("div", { class: "row" }, sel),
@@ -124,7 +125,7 @@ async function viewActivity() {
         h("td", {}, h("div", {}, e.title || e.domain), h("div", { class: "muted" }, e.url)),
         h("td", {}, e.reasons || ""),
         h("td", {}, h("button", { onclick: async () => { await api("/admin/banned", { method: "POST", body: JSON.stringify({ domain: e.domain, reason: "from activity" }) }); render(); } }, "Ban site")),
-      )) : [h("tr", {}, h("td", { colspan: "6", class: "muted" }, "Nothing flagged yet."))]))),
+      )) : [h("tr", {}, h("td", { colspan: "6", class: "muted" }, "No visits recorded yet."))]))),
   ];
 }
 
