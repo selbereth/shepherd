@@ -99,7 +99,7 @@ def test_admin_lists_and_stats(client, dev):
     assert all(d["last_seen"] for d in devices if d["name"] == "t")
     assert isinstance(client.get("/admin/banned", headers=ADMIN).json(), list)
     stats = client.get("/admin/stats", headers=ADMIN).json()
-    assert {"last_24h", "top_domains", "alert_channels"} <= stats.keys()
+    assert {"period", "top_domains", "alert_channels"} <= stats.keys()
     ev = client.get("/admin/events?verdict=block", headers=ADMIN).json()
     assert ev and "device_name" in ev[0]
 
@@ -120,3 +120,13 @@ def test_allowed_visits_are_logged(client, dev):
     assert r.json()["verdict"] == "allow"
     ev = client.get("/admin/events?verdict=allow", headers=ADMIN).json()
     assert any(e["domain"] == "example.org" for e in ev)
+
+
+def test_days_filter(client, dev):
+    client.post("/api/check", json={"url": "https://old.test/", "title": "", "text": ""}, headers=dev)
+    with connect() as db:
+        db.execute("UPDATE events SET ts = ts - 10 * 86400 WHERE domain = 'old.test'")
+    recent = client.get("/admin/events?days=7", headers=ADMIN).json()
+    assert all(e["domain"] != "old.test" for e in recent)
+    assert any(e["domain"] == "old.test" for e in client.get("/admin/events", headers=ADMIN).json())
+    assert client.get("/admin/stats?days=30", headers=ADMIN).json()["period"]["allow"] >= 1

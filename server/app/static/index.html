@@ -88,7 +88,10 @@ const ago = (ts) => {
 };
 const pill = (v) => h("span", { class: "pill " + v }, v);
 
-let tab = "activity", filter = "";
+let tab = "activity", filter = "", days = 1;
+try { days = Number(localStorage.getItem("shepherd_days")) || 1; } catch {}
+const RANGES = [[1, "Last 24 hours"], [7, "Last 7 days"], [30, "Last 30 days"], [90, "Last 90 days"], [0, "All time"]];
+const rangeLabel = () => (RANGES.find(([d]) => d === days) || RANGES[0])[1].toLowerCase();
 const tabs = { activity: "Activity", bans: "Banned sites", devices: "Devices" };
 
 function signOut() {
@@ -97,11 +100,11 @@ function signOut() {
 }
 
 async function renderCards() {
-  const s = await api("/admin/stats");
+  const s = await api("/admin/stats?days=" + (days || 36500));
   $("cards").replaceChildren(
-    h("div", { class: "card" }, h("b", {}, String(s.last_24h.allow + s.last_24h.warn + s.last_24h.block)), "Pages visited (24h)"),
-    h("div", { class: "card" }, h("b", {}, String(s.last_24h.block)), "Blocked (24h)"),
-    h("div", { class: "card" }, h("b", {}, String(s.last_24h.warn)), "Flagged (24h)"),
+    h("div", { class: "card" }, h("b", {}, String(s.period.allow + s.period.warn + s.period.block)), "Pages visited"),
+    h("div", { class: "card" }, h("b", {}, String(s.period.block)), "Blocked"),
+    h("div", { class: "card" }, h("b", {}, String(s.period.warn)), "Flagged"),
     h("div", { class: "card" }, "Top flagged: ", s.top_domains.length ? s.top_domains.map((d) => `${d.domain} (${d.n})`).join(", ") : "nothing yet"),
   );
   $("alertinfo").textContent = s.alert_channels.length ? "Alerts: " + s.alert_channels.join(", ") : "Alerts: not configured";
@@ -109,13 +112,13 @@ async function renderCards() {
 }
 
 async function viewActivity() {
-  const q = filter ? `?verdict=${filter}&limit=200` : "?limit=200";
+  const q = `?limit=2000${filter ? "&verdict=" + filter : ""}${days ? "&days=" + days : ""}`;
   const rows = await api("/admin/events" + q);
   const sel = h("select", { onchange: (e) => { filter = e.target.value; render(); } },
     ...[["", "All visits"], ["block", "Blocked"], ["warn", "Flagged"], ["allow", "Allowed"]].map(([v, l]) => {
       const o = h("option", { value: v }, l); if (v === filter) o.selected = true; return o; }));
   return [
-    h("div", { class: "row" }, sel),
+    h("div", { class: "row" }, sel, h("span", { class: "muted" }, `${rows.length} shown, ${rangeLabel()}`)),
     h("div", { class: "scroll" }, h("table", {},
       h("thead", {}, h("tr", {}, ...["When", "Device", "Result", "Page", "Why", ""].map((t) => h("th", {}, t)))),
       h("tbody", {}, rows.length ? rows.map((e) => h("tr", {},
@@ -192,8 +195,13 @@ async function viewDevices(stats) {
 }
 
 async function render() {
+  const range = h("select", { onchange: (e) => {
+    days = Number(e.target.value);
+    try { localStorage.setItem("shepherd_days", String(days)); } catch {}
+    render();
+  } }, ...RANGES.map(([v, l]) => { const o = h("option", { value: String(v) }, l); if (v === days) o.selected = true; return o; }));
   $("tabs").replaceChildren(...Object.entries(tabs).map(([k, l]) =>
-    h("button", { class: k === tab ? "on" : "", onclick: () => { tab = k; render(); } }, l)));
+    h("button", { class: k === tab ? "on" : "", onclick: () => { tab = k; render(); } }, l)), range);
   try {
     const stats = await renderCards();
     const nodes = await { activity: viewActivity, bans: viewBans, devices: () => viewDevices(stats) }[tab]();

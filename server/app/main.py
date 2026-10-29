@@ -175,21 +175,27 @@ def unban(domain: str) -> dict:
 
 
 @app.get("/admin/events", dependencies=[Depends(admin)])
-def events(limit: int = 100, verdict: str | None = None) -> list[dict]:
+def events(limit: int = 100, verdict: str | None = None, days: float | None = None) -> list[dict]:
     sql = "SELECT e.*, d.name AS device_name FROM events e LEFT JOIN devices d ON d.id = e.device_id"
+    where: list[str] = []
     args: list = []
     if verdict:
-        sql += " WHERE e.verdict = ?"
+        where.append("e.verdict = ?")
         args.append(verdict)
+    if days:
+        where.append("e.ts > ?")
+        args.append(now() - days * 86400)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY e.ts DESC LIMIT ?"
-    args.append(min(limit, 1000))
+    args.append(min(limit, 2000))
     with connect() as db:
         return [dict(r) for r in db.execute(sql, args).fetchall()]
 
 
 @app.get("/admin/stats", dependencies=[Depends(admin)])
-def stats() -> dict:
-    since = now() - 86400
+def stats(days: float = 1) -> dict:
+    since = now() - days * 86400
     with connect() as db:
         by_verdict = {
             r["verdict"]: r["n"]
@@ -205,7 +211,7 @@ def stats() -> dict:
             )
         ]
     return {
-        "last_24h": {
+        "period": {
             "allow": by_verdict.get("allow", 0),
             "warn": by_verdict.get("warn", 0),
             "block": by_verdict.get("block", 0),
