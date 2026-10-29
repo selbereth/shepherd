@@ -1,0 +1,7 @@
+{
+  "type": "object",
+  "properties": {
+    "server": { "title": "Shepherd server URL", "type": "string" },
+    "key": { "title": "Device key", "type": "string" }
+  }
+}
