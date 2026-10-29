@@ -116,11 +116,18 @@ def check(report: PageReport, background: BackgroundTasks, dev: dict = Depends(d
                     "INSERT OR IGNORE INTO banned_domains VALUES (?, ?, ?)",
                     (domain, "auto: " + "; ".join(reasons), now()),
                 )
-        db.execute(
-            "INSERT INTO events (device_id, ts, url, domain, title, score, verdict, reasons)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (dev["id"], now(), report.url, domain, report.title, score, verdict, "; ".join(reasons)),
-        )
+        # Single-page apps re-report the same URL as content loads; don't log an identical result again.
+        last = db.execute(
+            "SELECT ts, score, verdict FROM events WHERE device_id = ? AND url = ? ORDER BY ts DESC LIMIT 1",
+            (dev["id"], report.url),
+        ).fetchone()
+        repeat = last and last["verdict"] == verdict and last["score"] == score and now() - last["ts"] < 300
+        if not repeat:
+            db.execute(
+                "INSERT INTO events (device_id, ts, url, domain, title, score, verdict, reasons)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (dev["id"], now(), report.url, domain, report.title, score, verdict, "; ".join(reasons)),
+            )
     if verdict != "allow" and alerts.should_alert(verdict):
         background.add_task(alerts.notify_event, dev["name"], report.url, domain, verdict, score, reasons)
     return {"verdict": verdict, "score": score, "reasons": reasons}

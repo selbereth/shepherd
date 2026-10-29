@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Shepherd",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Reports pages to your shepherd server and blocks banned sites.",
   "permissions": ["storage", "declarativeNetRequest", "alarms", "webNavigation"],
   "host_permissions": ["<all_urls>"],

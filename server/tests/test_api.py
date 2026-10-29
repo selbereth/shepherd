@@ -198,3 +198,14 @@ def test_content_scoring_signals(client, dev):
     news = "State passes porn age-check law. Critics say the xxx rules are vague and the porn industry will resist. " * 1
     assert post("https://news.example/a", "Law", news)["verdict"] in ("warn", "allow")
     assert post("https://news.example/b", "Recipes", "pasta " * 200, "general")["verdict"] == "allow"
+
+
+def test_repeat_checks_of_same_page_are_logged_once(client, dev):
+    page = {"url": "https://spa.example/feed", "title": "feed", "text": "hello"}
+    for _ in range(3):  # an SPA re-reports the same page as content loads
+        client.post("/api/check", json=page, headers=dev)
+    events = lambda: [e for e in client.get("/admin/events", headers=ADMIN).json() if e["url"] == page["url"]]
+    assert len(events()) == 1
+    # A changed result for the same URL is still logged.
+    client.post("/api/check", json={**page, "text": "porn porn xxx nsfw hentai nude erotic"}, headers=dev)
+    assert len(events()) == 2
