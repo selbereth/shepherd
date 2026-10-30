@@ -198,3 +198,28 @@ def test_content_scoring_signals(client, dev):
     news = "State passes porn age-check law. Critics say the xxx rules are vague and the porn industry will resist. " * 1
     assert post("https://news.example/a", "Law", news)["verdict"] in ("warn", "allow")
     assert post("https://news.example/b", "Recipes", "pasta " * 200, "general")["verdict"] == "allow"
+
+
+def test_computers_are_told_apart(client):
+    key = client.post("/admin/devices", json={"name": "shared"}, headers=ADMIN).json()["key"]
+    a = {"X-Device-Key": key, "X-Instance": "aaaaaaaa-1111"}
+    b = {"X-Device-Key": key, "X-Instance": "bbbbbbbb-2222"}
+    for h, host in ((a, "one.example"), (b, "two.example")):
+        client.post("/api/check", json={"url": f"https://{host}/"}, headers=h)
+    # bad IDs are ignored rather than rejected
+    client.post("/api/check", json={"url": "https://three.example/"}, headers={"X-Device-Key": key, "X-Instance": "bad id!"})
+
+    inst = {i["id"]: i for i in client.get("/admin/instances", headers=ADMIN).json()}
+    assert {"aaaaaaaa-1111", "bbbbbbbb-2222"} <= inst.keys() and "bad id!" not in inst
+
+    assert client.patch("/admin/instances/aaaaaaaa-1111", json={"label": "Living room PC"}, headers=ADMIN).status_code == 200
+    assert client.patch("/admin/instances/nope", json={"label": "x"}, headers=ADMIN).status_code == 404
+    ev = {e["domain"]: e for e in client.get("/admin/events", headers=ADMIN).json()}
+    assert ev["one.example"]["instance_label"] == "Living room PC"
+    assert ev["two.example"]["instance_id"] == "bbbbbbbb-2222" and ev["two.example"]["instance_label"] == ""
+    assert ev["three.example"]["instance_id"] is None
+
+    # another device can't claim an existing computer ID
+    other = client.post("/admin/devices", json={"name": "other"}, headers=ADMIN).json()["key"]
+    client.post("/api/check", json={"url": "https://four.example/"}, headers={"X-Device-Key": other, "X-Instance": "aaaaaaaa-1111"})
+    assert {i["id"]: i["device_id"] for i in client.get("/admin/instances", headers=ADMIN).json()}["aaaaaaaa-1111"] == inst["aaaaaaaa-1111"]["device_id"]

@@ -123,7 +123,7 @@ async function viewActivity() {
       h("thead", {}, h("tr", {}, ...["When", "Device", "Result", "Page", "Why", ""].map((t) => h("th", {}, t)))),
       h("tbody", {}, rows.length ? rows.map((e) => h("tr", {},
         h("td", {}, fmt(e.ts)),
-        h("td", {}, e.device_name || e.device_id),
+        h("td", {}, e.device_name || e.device_id, e.instance_id ? h("div", { class: "muted" }, e.instance_label || "Computer " + e.instance_id.slice(0, 4)) : ""),
         h("td", {}, pill(e.verdict), " ", String(e.score)),
         h("td", {}, h("div", {}, e.title || e.domain), h("div", { class: "muted" }, e.url)),
         h("td", {}, e.reasons || ""),
@@ -199,7 +199,7 @@ async function viewAds() {
 }
 
 async function viewDevices(stats) {
-  const rows = await api("/admin/devices");
+  const [rows, computers] = await Promise.all([api("/admin/devices"), api("/admin/instances")]);
   const out = h("div");
   const name = h("input", { placeholder: "Device name, e.g. Maya's laptop" });
   const create = async () => {
@@ -217,6 +217,20 @@ async function viewDevices(stats) {
     try { const r = await api("/admin/alerts/test", { method: "POST" }); e.target.textContent = "Sent to " + r.sent_to.join(", "); }
     catch (err) { e.target.textContent = String(err.message); }
   } }, "Send test alert");
+  const computersFor = (devId) => {
+    const mine = computers.filter((c) => c.device_id === devId);
+    if (!mine.length) return h("div", { class: "muted" }, "No computers seen yet (needs extension 0.3.0+).");
+    return h("div", {}, ...mine.map((c) => {
+      const input = h("input", { value: c.label, placeholder: "Computer " + c.id.slice(0, 4) + " (name it)", size: "22" });
+      const save = h("button", { onclick: async (e) => {
+        await api("/admin/instances/" + encodeURIComponent(c.id), { method: "PATCH", body: JSON.stringify({ label: input.value }) });
+        e.target.textContent = "Saved";
+      } }, "Save");
+      const forget = h("button", { class: "danger", onclick: async () => {
+        if (confirm("Forget this computer? It reappears if it checks in again.")) { await api("/admin/instances/" + encodeURIComponent(c.id), { method: "DELETE" }); render(); } } }, "Forget");
+      return h("div", { class: "row", style: "margin:.3rem 0" }, input, save, h("span", { class: "muted" }, "seen " + ago(c.last_seen)), forget);
+    }));
+  };
   const mk = (rows) => {
     const limit = (stats?.offline_minutes || 15) * 60;
     return h("div", { class: "scroll", id: "devtable" }, h("table", {},
@@ -224,7 +238,7 @@ async function viewDevices(stats) {
       h("tbody", {}, rows.length ? rows.map((d) => {
         const online = d.last_seen && Date.now() / 1000 - d.last_seen < limit;
         return h("tr", {},
-          h("td", {}, d.name, h("div", { class: "muted" }, d.id)),
+          h("td", {}, d.name, h("div", { class: "muted" }, d.id), computersFor(d.id)),
           h("td", {}, pill(online ? "ok" : "warn"), " ", online ? "online" : d.last_seen ? "offline" : "never connected"),
           h("td", {}, ago(d.last_seen)),
           h("td", {}, h("button", { class: "danger", onclick: async () => {

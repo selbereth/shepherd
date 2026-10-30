@@ -33,6 +33,13 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TABLE IF NOT EXISTS feed_domains (domain TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS ads_domains (domain TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS ads_allow (domain TEXT PRIMARY KEY, added_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS instances (
+    id TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    first_seen REAL NOT NULL,
+    last_seen REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS events_verdict ON events(verdict);
@@ -46,6 +53,8 @@ def init_db() -> None:
         cols = {r["name"] for r in db.execute("PRAGMA table_info(devices)")}
         if "last_seen" not in cols:
             db.execute("ALTER TABLE devices ADD COLUMN last_seen REAL")
+        if "instance_id" not in {r["name"] for r in db.execute("PRAGMA table_info(events)")}:
+            db.execute("ALTER TABLE events ADD COLUMN instance_id TEXT")
         _seed_blocklist(db)
 
 

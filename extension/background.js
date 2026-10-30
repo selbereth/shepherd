@@ -2,10 +2,22 @@
 // page reports from the content script to the shepherd server.
 const SYNC_MINUTES = 5;
 
+// Settings come from (in order): admin policy, Chrome sync if the user chose to share settings
+// across computers, then this computer's own storage.
 async function cfg() {
   const { server, key } = await chrome.storage.managed?.get(["server", "key"]).catch(() => ({})) ?? {};
   if (server && key) return { server, key };
-  return chrome.storage.local.get(["server", "key"]);
+  const { shareSettings } = await chrome.storage.local.get("shareSettings");
+  return (shareSettings ? chrome.storage.sync : chrome.storage.local).get(["server", "key"]);
+}
+
+// Random per-install ID, never synced, so two computers sharing a key can still be told apart.
+async function instanceId() {
+  const { instanceId } = await chrome.storage.local.get("instanceId");
+  if (instanceId) return instanceId;
+  const id = crypto.randomUUID();
+  await chrome.storage.local.set({ instanceId: id });
+  return id;
 }
 
 async function api(path, init = {}) {
@@ -13,7 +25,7 @@ async function api(path, init = {}) {
   if (!server || !key) throw new Error("not configured");
   const res = await fetch(server.replace(/\/$/, "") + path, {
     ...init,
-    headers: { "Content-Type": "application/json", "X-Device-Key": key },
+    headers: { "Content-Type": "application/json", "X-Device-Key": key, "X-Instance": await instanceId() },
   });
   if (!res.ok) throw new Error(`${path} -> ${res.status}`);
   return res.json();

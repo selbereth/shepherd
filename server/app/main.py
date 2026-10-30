@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -60,14 +61,26 @@ def admin(x_admin_key: str = Header(default="")) -> None:
         raise HTTPException(401, "bad admin key")
 
 
-def device(x_device_key: str = Header(default="")) -> dict:
-    """Authenticate a client and record that it checked in."""
+INSTANCE_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
+
+
+def device(x_device_key: str = Header(default=""), x_instance: str = Header(default="")) -> dict:
+    """Authenticate a client and record that it (and the specific computer behind it) checked in."""
     with connect() as db:
         row = db.execute("SELECT id, name FROM devices WHERE key = ?", (x_device_key,)).fetchone()
         if not row:
             raise HTTPException(401, "unknown device")
-        db.execute("UPDATE devices SET last_seen = ? WHERE id = ?", (now(), row["id"]))
-    return dict(row)
+        t = now()
+        db.execute("UPDATE devices SET last_seen = ? WHERE id = ?", (t, row["id"]))
+        instance = x_instance if INSTANCE_RE.match(x_instance) else None
+        if instance:
+            # An ID can't move between devices: ignore it if another device already owns it.
+            db.execute(
+                "INSERT INTO instances (id, device_id, first_seen, last_seen) VALUES (?,?,?,?)"
+                " ON CONFLICT(id) DO UPDATE SET last_seen = excluded.last_seen WHERE device_id = excluded.device_id",
+                (instance, row["id"], t, t),
+            )
+    return {**dict(row), "instance": instance}
 
 
 def domain_of(url: str) -> str:
@@ -117,9 +130,9 @@ def check(report: PageReport, background: BackgroundTasks, dev: dict = Depends(d
                     (domain, "auto: " + "; ".join(reasons), now()),
                 )
         db.execute(
-            "INSERT INTO events (device_id, ts, url, domain, title, score, verdict, reasons)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (dev["id"], now(), report.url, domain, report.title, score, verdict, "; ".join(reasons)),
+            "INSERT INTO events (device_id, ts, url, domain, title, score, verdict, reasons, instance_id)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (dev["id"], now(), report.url, domain, report.title, score, verdict, "; ".join(reasons), dev["instance"]),
         )
     if verdict != "allow" and alerts.should_alert(verdict):
         background.add_task(alerts.notify_event, dev["name"], report.url, domain, verdict, score, reasons)
@@ -161,9 +174,9 @@ def proceed(body: Proceed, dev: dict = Depends(device)) -> dict:
     domain = domain_of(body.url)
     with connect() as db:
         db.execute(
-            "INSERT INTO events (device_id, ts, url, domain, title, score, verdict, reasons)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (dev["id"], now(), body.url, domain, "", 0, "allow", "proceeded past ad/tracker/malware block"),
+            "INSERT INTO events (device_id, ts, url, domain, title, score, verdict, reasons, instance_id)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (dev["id"], now(), body.url, domain, "", 0, "allow", "proceeded past ad/tracker/malware block", dev["instance"]),
         )
     return {"ok": True}
 
@@ -195,10 +208,40 @@ def list_devices() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+@app.get("/admin/instances", dependencies=[Depends(admin)])
+def list_instances() -> list[dict]:
+    with connect() as db:
+        rows = db.execute(
+            "SELECT id, device_id, label, first_seen, last_seen FROM instances ORDER BY first_seen"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+class Label(BaseModel):
+    label: str = Field(max_length=60)
+
+
+@app.patch("/admin/instances/{instance_id}", dependencies=[Depends(admin)])
+def name_instance(instance_id: str, body: Label) -> dict:
+    with connect() as db:
+        n = db.execute("UPDATE instances SET label = ? WHERE id = ?", (body.label.strip(), instance_id)).rowcount
+    if not n:
+        raise HTTPException(404, "unknown computer")
+    return {"ok": True}
+
+
+@app.delete("/admin/instances/{instance_id}", dependencies=[Depends(admin)])
+def delete_instance(instance_id: str) -> dict:
+    with connect() as db:
+        db.execute("DELETE FROM instances WHERE id = ?", (instance_id,))
+    return {"ok": True}
+
+
 @app.delete("/admin/devices/{dev_id}", dependencies=[Depends(admin)])
 def delete_device(dev_id: str) -> dict:
     with connect() as db:
         db.execute("DELETE FROM devices WHERE id = ?", (dev_id,))
+        db.execute("DELETE FROM instances WHERE device_id = ?", (dev_id,))
     alerts._offline.discard(dev_id)
     return {"ok": True}
 
@@ -278,7 +321,10 @@ def unban(domain: str) -> dict:
 
 @app.get("/admin/events", dependencies=[Depends(admin)])
 def events(limit: int = 100, verdict: str | None = None, days: float | None = None) -> list[dict]:
-    sql = "SELECT e.*, d.name AS device_name FROM events e LEFT JOIN devices d ON d.id = e.device_id"
+    sql = (
+        "SELECT e.*, d.name AS device_name, i.label AS instance_label FROM events e"
+        " LEFT JOIN devices d ON d.id = e.device_id LEFT JOIN instances i ON i.id = e.instance_id"
+    )
     where: list[str] = []
     args: list = []
     if verdict:
